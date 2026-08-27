@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AppLock 지연기</string>
+    <string name="accessibility_service_description">선택한 앱 실행을 감지해 20초 지연시킵니다.</string>
+</resources>
