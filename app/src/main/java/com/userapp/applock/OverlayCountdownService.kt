@@ -42,8 +42,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class OverlayCountdownService : Service() {
@@ -95,7 +95,6 @@ class OverlayCountdownService : Service() {
     }
 
     private fun launchTargetNow(targetPackage: String) {
-        // 짧은 유예 창구를 둬서, 재실행되는 순간 접근성 서비스가 다시 감지해 무한 루프 되는 것을 방지
         PrefsManager.setAllowUntil(this, targetPackage, System.currentTimeMillis() + 5_000)
         val launchIntent = packageManager.getLaunchIntentForPackage(targetPackage)
         launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -127,10 +126,8 @@ private fun OverlayContent(
     onEmergency: () -> Unit
 ) {
     var secondsLeft by remember { mutableIntStateOf(totalSeconds) }
-    var finished by remember { mutableFloatStateOf(0f) } // 사용 안 함, 자리 표시
     val scope = rememberCoroutineScope()
 
-    // 카운트다운
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (secondsLeft > 0) {
             delay(1000)
@@ -139,7 +136,6 @@ private fun OverlayContent(
         onFinished()
     }
 
-    // 호흡 애니메이션 (4초 주기 확대/축소)
     val infiniteTransition = rememberInfiniteTransition(label = "breathe")
     val scale by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -151,9 +147,7 @@ private fun OverlayContent(
         label = "scale"
     )
 
-    // 긴급 실행 길게 누르기 진행률
     var holdProgress by remember { mutableFloatStateOf(0f) }
-    var holding by remember { mutableFloatStateOf(0f) }
 
     Box(
         modifier = Modifier
@@ -191,7 +185,6 @@ private fun OverlayContent(
             )
         }
 
-        // 긴급 실행 버튼: 왼쪽 아래, 3초 길게 눌러야 작동
         Box(
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -200,22 +193,26 @@ private fun OverlayContent(
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onPress = {
-                            var elapsed = 0L
-                            val stepMs = 30L
-                            try {
-                                while (isActive) {
-                                    delay(stepMs)
-                                    elapsed += stepMs
-                                    holdProgress = (elapsed.toFloat() / holdMillisToUnlock).coerceIn(0f, 1f)
-                                    if (elapsed >= holdMillisToUnlock) {
-                                        onEmergency()
-                                        break
+                            var released = false
+                            var triggered = false
+                            coroutineScope {
+                                launch {
+                                    released = tryAwaitRelease()
+                                }
+                                launch {
+                                    val startTime = System.currentTimeMillis()
+                                    while (!released && !triggered) {
+                                        val elapsed = System.currentTimeMillis() - startTime
+                                        holdProgress = (elapsed.toFloat() / holdMillisToUnlock).coerceIn(0f, 1f)
+                                        if (elapsed >= holdMillisToUnlock) {
+                                            triggered = true
+                                            onEmergency()
+                                        }
+                                        delay(30)
                                     }
                                 }
-                            } finally {
-                                // 손을 떼거나 취소되면 리셋
-                                if (holdProgress < 1f) holdProgress = 0f
                             }
+                            if (holdProgress < 1f) holdProgress = 0f
                         }
                     )
                 }
